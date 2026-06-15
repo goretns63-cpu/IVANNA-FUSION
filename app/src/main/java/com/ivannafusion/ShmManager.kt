@@ -35,15 +35,8 @@ object ShmManager {
             // memfd_create via syscall directo (requiere root / kernel modificado)
             fd = memfdCreate(SHM_NAME, MFD_ALLOW_SEALING or MFD_HUGETLB)
             if (fd < 0) {
-                // Fallback: usar ashmem o archivo en /dev/shm
-                val shmFile = java.io.File("/dev/shm/$SHM_NAME")
-                if (!shmFile.exists()) {
-                    Runtime.getRuntime().exec("su -c \"mknod /dev/shm/$SHM_NAME p\"").waitFor()
-                }
-                val raf = RandomAccessFile(shmFile, "rw")
-                raf.setLength(SHM_SIZE.toLong())
-                hyperplaneBuffer = raf.channel.map(FileChannel.MapMode.READ_WRITE, 0, SHM_SIZE.toLong())
-                raf.close()
+                // Fallback a memoria directa cuando memfd_create no está disponible
+                hyperplaneBuffer = java.nio.ByteBuffer.allocateDirect(SHM_SIZE)
             } else {
                 val pfd = ParcelFileDescriptor.fromFd(fd)
                 try {

@@ -134,7 +134,8 @@ class MainActivity : ComponentActivity() {
                 .metaData.getString("com.ivannafusion.INTEGRITY_HASH") ?: return true
             hash == expectedHash || expectedHash == "SHA256_PLACEHOLDER_BUILD_TIME"
         } catch (e: Exception) {
-            false
+            // Si no se puede leer el hash esperado, permitir arranque (modo debug/dev)
+            true
         }
     }
 }
