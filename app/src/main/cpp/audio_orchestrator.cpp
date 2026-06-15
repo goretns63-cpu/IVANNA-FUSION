@@ -58,15 +58,16 @@ static AudioEngine g_engine;
 // ── Kalman ──────────────────────────────────────────────────────────────────
 static void kalmanInit(KalmanState &k, int sampleRate) {
     k.phase = 0.0f;
-    k.freq  = 440.0f;   // 440 Hz — punto de partida estable
+    // freq interna en rad/sample: 440 Hz * 2π / fs
+    k.freq  = 440.0f * 2.0f * (float)M_PI / (float)sampleRate;
     k.chirp = 0.0f;
     memset(k.P, 0, sizeof(k.P));
-    k.P[0][0] = 0.1f;   // incertidumbre inicial baja en fase
-    k.P[1][1] = 1e4f;   // frecuencia puede variar
-    k.P[2][2] = 1.0f;
-    k.R       = 0.001f;
+    k.P[0][0] = 0.01f;
+    k.P[1][1] = 1.0f;
+    k.P[2][2] = 0.001f;
+    k.R       = 1e-4f;  // buffer sintético deterministico → medición muy confiable
     k.initialized = true;
-    LOGI("Kalman init: fs=%d, freq=%.1f Hz", sampleRate, k.freq);
+    LOGI("Kalman init: fs=%d, freq_rad=%.6f (440 Hz)", sampleRate, k.freq);
 }
 
 static float kalmanStep(KalmanState &k, float measurement, float dt) {
@@ -160,8 +161,12 @@ aaudio_data_callback_result_t audioCallback(
         g_engine.hyperplane->seq_counter++;
         g_engine.hyperplane->active_buffer =
             (g_engine.activeBuffer == g_engine.bufferA) ? 0 : 1;
+        // kalman_state[0] = fase acumulada (rad)
+        // kalman_state[1] = frecuencia en Hz (no rad/sample)
+        // kalman_state[2] = chirp (rad/sample²)
         g_engine.hyperplane->kalman_state[0] = g_engine.kalman.phase;
-        g_engine.hyperplane->kalman_state[1] = g_engine.kalman.freq;
+        g_engine.hyperplane->kalman_state[1] =
+            g_engine.kalman.freq * g_engine.sampleRate / (2.0f * (float)M_PI);
         g_engine.hyperplane->kalman_state[2] = g_engine.kalman.chirp;
     }
 
@@ -179,6 +184,10 @@ Java_com_ivannafusion_AudioEngine_nativeCreateEngine(
     g_engine.bitDepth   = bitDepth;
 
     kalmanInit(g_engine.kalman, sampleRate);
+    g_engine.phase_error_rms = 0.0f;
+    g_engine.frameCounter    = 0;
+    g_phaseErrorAcc          = 0.0f;
+    g_phaseErrorCount        = 0;
 
     // Buffers con tono 440 Hz a amplitud baja
     float dt = 1.0f / static_cast<float>(sampleRate);
