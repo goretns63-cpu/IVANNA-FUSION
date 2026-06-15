@@ -1,6 +1,11 @@
 /*
  * IVANNA-FUSION TRASCENDENTAL
  * © 2025 Luis Uriel Pimentel Pérez. Todos los derechos reservados.
+ *
+ * ARQUITECTURA:
+ *   - AAudio OUTPUT: emite silencio. No inyecta tonos sintéticos.
+ *   - Kalman corre sobre muestras escritas desde AudioRecord (Kotlin→SHM→nativeProcessCapture).
+ *   - phase_error_rms refleja el error real de la señal capturada.
  */
 
 #include <jni.h>
@@ -9,74 +14,50 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
-#include <arm_neon.h>
+#include <atomic>
 
 #define LOG_TAG "IVANNA-Audio"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// ── Hyperplane layout (debe coincidir con ShmManager.kt) ────────────────────
+// ── Hyperplane layout ────────────────────────────────────────────────────────
 struct Hyperplane {
-    int32_t  biquad_coefs[64][5];
-    float    kalman_state[3];
-    uint8_t  poblacion_evolutiva[128][256];
-    int16_t  temp_soc[10];
-    uint8_t  sched_table[8][8][4][4][3];
-    uint64_t seq_counter;
-    uint8_t  active_buffer;
+    int32_t  biquad_coefs[64][5];          // 1280 B
+    float    kalman_state[3];              //   12 B
+    uint8_t  poblacion_evolutiva[128][256];// 32768 B
+    int16_t  temp_soc[10];                //   20 B
+    uint8_t  sched_table[8][8][4][4][3];  // 3072 B
+    uint64_t seq_counter;                 //    8 B
+    uint8_t  active_buffer;               //    1 B
 };
 
-// ── Kalman cúbico interno ────────────────────────────────────────────────────
+// ── Kalman cúbico ────────────────────────────────────────────────────────────
 struct KalmanState {
     float phase = 0.0f;
-    float freq  = 440.0f;   // Hz – valor sensato, converge rápido
+    float freq  = 0.0f;   // rad/sample
     float chirp = 0.0f;
     float P[3][3];
-    float R = 0.001f;       // ruido medición más bajo → sigue mejor la señal
+    float R = 1e-4f;
     bool  initialized = false;
 };
 
-struct AudioEngine {
-    AAudioStream *stream    = nullptr;
-    Hyperplane   *hyperplane = nullptr;
-    float  fusion_level     = 0.5f;
-    int    sampleRate       = 48000;
-    int    bitDepth         = 32;
-    int64_t frameCounter    = 0;
-
-    float bufferA[512];
-    float bufferB[512];
-    float *activeBuffer  = bufferA;
-    float *processBuffer = bufferB;
-
-    KalmanState kalman;
-    float phase_error_rms = 0.0f;
-};
-
-static AudioEngine g_engine;
-
-// ── Kalman ──────────────────────────────────────────────────────────────────
 static void kalmanInit(KalmanState &k, int sampleRate) {
     k.phase = 0.0f;
-    // freq interna en rad/sample: 440 Hz * 2π / fs
     k.freq  = 440.0f * 2.0f * (float)M_PI / (float)sampleRate;
     k.chirp = 0.0f;
     memset(k.P, 0, sizeof(k.P));
-    k.P[0][0] = 0.01f;
+    k.P[0][0] = 0.1f;
     k.P[1][1] = 1.0f;
     k.P[2][2] = 0.001f;
-    k.R       = 1e-4f;  // buffer sintético deterministico → medición muy confiable
+    k.R = 1e-4f;
     k.initialized = true;
-    LOGI("Kalman init: fs=%d, freq_rad=%.6f (440 Hz)", sampleRate, k.freq);
 }
 
 static float kalmanStep(KalmanState &k, float measurement, float dt) {
-    // Ruido de proceso pequeño: el engine es deterministico
-    const float qPhase = 1e-6f;
-    const float qFreq  = 1e-4f;
-    const float qChirp = 1e-8f;
+    const float qPhase = 1e-8f;
+    const float qFreq  = 1e-6f;
+    const float qChirp = 1e-10f;
 
-    // Predict
     float new_phase = k.phase + k.freq * dt + 0.5f * k.chirp * dt * dt;
     float new_freq  = k.freq  + k.chirp * dt;
     float new_chirp = k.chirp;
@@ -85,7 +66,6 @@ static float kalmanStep(KalmanState &k, float measurement, float dt) {
     k.P[1][1] += qFreq;
     k.P[2][2] += qChirp;
 
-    // Update: H = [1,0,0]
     float S  = k.P[0][0] + k.R;
     float K0 = k.P[0][0] / S;
     float K1 = k.P[1][0] / S;
@@ -103,67 +83,37 @@ static float kalmanStep(KalmanState &k, float measurement, float dt) {
     return innov;
 }
 
-// ── DSP ─────────────────────────────────────────────────────────────────────
-static void processAudioBlock(float *input, float *output, int numFrames,
-                               float fusion, KalmanState &k, int sampleRate,
-                               float *phaseErrorAcc, int *phaseErrorCount) {
-    float dt = 1.0f / static_cast<float>(sampleRate);
+// ── Engine ───────────────────────────────────────────────────────────────────
+struct AudioEngine {
+    AAudioStream *stream    = nullptr;
+    Hyperplane   *hyperplane = nullptr;
+    float  fusion_level     = 0.5f;
+    int    sampleRate       = 48000;
+    int    bitDepth         = 32;
+    int64_t frameCounter    = 0;
+    KalmanState kalman;
+    std::atomic<float> phase_error_rms{0.0f};
+};
 
-    for (int i = 0; i < numFrames; i++) {
-        float in_sample = input[i];
-        float innov = kalmanStep(k, in_sample, dt);
-
-        *phaseErrorAcc   += innov * innov;
-        (*phaseErrorCount)++;
-
-        // fusion=0 → señal pura (sin artefactos Kalman)
-        // fusion>0 → mezcla con predicción; la predicción converge rápido
-        float predicted = k.phase;
-        // Limitar la contribución predicha para evitar distorsión
-        predicted = std::fmaxf(-1.0f, std::fminf(1.0f, predicted));
-        output[i] = in_sample * (1.0f - fusion) + predicted * fusion * 0.05f;
-        // 0.05: el phase Kalman está en radianes acumulados, no amplitud normalizada;
-        // escalar para que no sature la salida de audio
-    }
-
-    g_engine.frameCounter += numFrames;
-}
-
-// ── Callback AAudio ─────────────────────────────────────────────────────────
+static AudioEngine g_engine;
 static float g_phaseErrorAcc   = 0.0f;
 static int   g_phaseErrorCount = 0;
 
+// ── Callback AAudio OUTPUT — emite SILENCIO ──────────────────────────────────
 aaudio_data_callback_result_t audioCallback(
     AAudioStream * /*stream*/,
     void         * /*userData*/,
     void          *audioData,
     int32_t        numFrames
 ) {
-    float *out     = static_cast<float*>(audioData);
-    float *current = g_engine.activeBuffer;
-    float *next    = (current == g_engine.bufferA) ? g_engine.bufferB : g_engine.bufferA;
+    // Silencio puro: no se inyecta ningún tono sintético en la cadena de audio
+    memset(audioData, 0, (size_t)numFrames * 2 * sizeof(float)); // stereo float
 
-    processAudioBlock(current, out, numFrames,
-                      g_engine.fusion_level,
-                      g_engine.kalman,
-                      g_engine.sampleRate,
-                      &g_phaseErrorAcc, &g_phaseErrorCount);
-
-    if (g_phaseErrorCount > 0) {
-        g_engine.phase_error_rms = std::sqrt(g_phaseErrorAcc / g_phaseErrorCount);
-        g_phaseErrorAcc   = 0.0f;
-        g_phaseErrorCount = 0;
-    }
-
-    g_engine.activeBuffer = next;
+    g_engine.frameCounter += numFrames;
 
     if (g_engine.hyperplane) {
         g_engine.hyperplane->seq_counter++;
-        g_engine.hyperplane->active_buffer =
-            (g_engine.activeBuffer == g_engine.bufferA) ? 0 : 1;
-        // kalman_state[0] = fase acumulada (rad)
-        // kalman_state[1] = frecuencia en Hz (no rad/sample)
-        // kalman_state[2] = chirp (rad/sample²)
+        g_engine.hyperplane->active_buffer = 0;
         g_engine.hyperplane->kalman_state[0] = g_engine.kalman.phase;
         g_engine.hyperplane->kalman_state[1] =
             g_engine.kalman.freq * g_engine.sampleRate / (2.0f * (float)M_PI);
@@ -179,29 +129,19 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_com_ivannafusion_AudioEngine_nativeCreateEngine(
         JNIEnv * /*env*/, jobject /*thiz*/, jint sampleRate, jint bitDepth) {
-
     g_engine.sampleRate = sampleRate;
     g_engine.bitDepth   = bitDepth;
-
     kalmanInit(g_engine.kalman, sampleRate);
-    g_engine.phase_error_rms = 0.0f;
-    g_engine.frameCounter    = 0;
-    g_phaseErrorAcc          = 0.0f;
-    g_phaseErrorCount        = 0;
-
-    // Buffers con tono 440 Hz a amplitud baja
-    float dt = 1.0f / static_cast<float>(sampleRate);
-    for (int i = 0; i < 512; i++) {
-        float t = i * dt;
-        g_engine.bufferA[i] = std::sin(2.0f * (float)M_PI * 440.0f * t) * 0.05f;
-        g_engine.bufferB[i] = std::sin(2.0f * (float)M_PI * 440.0f * (t + 512 * dt)) * 0.05f;
-    }
+    g_engine.phase_error_rms.store(0.0f);
+    g_engine.frameCounter = 0;
+    g_phaseErrorAcc       = 0.0f;
+    g_phaseErrorCount     = 0;
 
     AAudioStreamBuilder *builder;
     AAudio_createStreamBuilder(&builder);
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED); // SHARED para coexistir
     AAudioStreamBuilder_setSampleRate(builder, sampleRate);
     AAudioStreamBuilder_setChannelCount(builder, 2);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
@@ -209,13 +149,10 @@ Java_com_ivannafusion_AudioEngine_nativeCreateEngine(
 
     aaudio_result_t result = AAudioStreamBuilder_openStream(builder, &g_engine.stream);
     AAudioStreamBuilder_delete(builder);
-
     if (result != AAUDIO_OK)
         LOGE("Failed to open AAudio stream: %s", AAudio_convertResultToText(result));
-
-    int32_t bufSz = g_engine.stream
-        ? AAudioStream_getBufferSizeInFrames(g_engine.stream) : 0;
-    LOGI("AudioEngine creado: %d Hz, %d bits, buffer: %d frames", sampleRate, bitDepth, bufSz);
+    else
+        LOGI("AudioEngine OK: %d Hz, %d bits (SHARED, silent output)", sampleRate, bitDepth);
 
     return reinterpret_cast<jlong>(&g_engine);
 }
@@ -226,7 +163,7 @@ Java_com_ivannafusion_AudioEngine_nativeStartProcessing(
     if (!g_engine.stream) return;
     aaudio_result_t r = AAudioStream_requestStart(g_engine.stream);
     if (r != AAUDIO_OK) LOGE("requestStart: %s", AAudio_convertResultToText(r));
-    else LOGI("Audio processing started");
+    else LOGI("Audio processing started (silent output)");
 }
 
 JNIEXPORT jint JNICALL
@@ -237,8 +174,7 @@ Java_com_ivannafusion_AudioEngine_nativeGetLatency(
     aaudio_result_t r = AAudioStream_getTimestamp(
         g_engine.stream, CLOCK_MONOTONIC, &framePosition, &presentationNs);
     if (r != AAUDIO_OK) return 0;
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     int64_t nowNs = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
     int64_t writtenFrames = AAudioStream_getFramesWritten(g_engine.stream);
     int64_t pendingFrames = writtenFrames - framePosition;
@@ -262,7 +198,34 @@ Java_com_ivannafusion_AudioEngine_nativeSetFusionLevel(
 JNIEXPORT jfloat JNICALL
 Java_com_ivannafusion_AudioEngine_nativeGetPhaseError(
         JNIEnv * /*env*/, jobject /*thiz*/, jlong /*handle*/) {
-    return g_engine.phase_error_rms;
+    return g_engine.phase_error_rms.load();
+}
+
+// Llamado desde Kotlin con muestras reales de AudioRecord (mono float)
+JNIEXPORT void JNICALL
+Java_com_ivannafusion_AudioEngine_nativeProcessCapture(
+        JNIEnv *env, jobject /*thiz*/, jfloatArray samples, jint n) {
+    jfloat *buf = env->GetFloatArrayElements(samples, nullptr);
+    float dt = 1.0f / (float)g_engine.sampleRate;
+    float acc = 0.0f;
+    int   cnt = 0;
+    for (int i = 0; i < n; i++) {
+        float innov = kalmanStep(g_engine.kalman, buf[i], dt);
+        acc += innov * innov;
+        cnt++;
+    }
+    if (cnt > 0) {
+        g_engine.phase_error_rms.store(std::sqrt(acc / cnt));
+    }
+    env->ReleaseFloatArrayElements(samples, buf, JNI_ABORT);
+
+    // Actualizar SHM con estado Kalman actualizado
+    if (g_engine.hyperplane) {
+        g_engine.hyperplane->kalman_state[0] = g_engine.kalman.phase;
+        g_engine.hyperplane->kalman_state[1] =
+            g_engine.kalman.freq * g_engine.sampleRate / (2.0f * (float)M_PI);
+        g_engine.hyperplane->kalman_state[2] = g_engine.kalman.chirp;
+    }
 }
 
 JNIEXPORT void JNICALL
