@@ -21,12 +21,14 @@ object AudioEngine {
     private var audioTrack: AudioTrack? = null
     private var nativeHandle: Long = 0
     var initialized = false
+    private var appContext: Context? = null   // 🔹 Guardamos el contexto para reiniciar
 
     var audio_fs_hz: Int = 48_000
     var audio_bit_depth: Int = 32
     var audio_latencia_us: Int = 0
 
     fun initialize(context: Context) {
+        appContext = context.applicationContext   // 🔹 Almacenamos contexto
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
 
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -138,6 +140,17 @@ object AudioEngine {
         audioTrack?.release()
         audioTrack = null
         initialized = false
+    }
+
+    // 🔹 NUEVO: Reinicio completo del motor de audio
+    fun restart() {
+        Log.w(TAG, "Restarting audio engine...")
+        shutdown()
+        // Pequeña pausa para liberación completa de recursos
+        Thread.sleep(50)
+        appContext?.let { initialize(it) }
+            ?: Log.e(TAG, "Cannot restart audio: context is null")
+        Log.i(TAG, "Audio engine restarted successfully")
     }
 
     // ── JNI declarations ─────────────────────────────────────────────────────
