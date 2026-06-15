@@ -23,8 +23,23 @@ jobs:
       - name: Configurar Android SDK + NDK
         uses: android-actions/setup-android@v3
 
+      - name: Cache NDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk/25.2.9519653
+            ${{ runner.tool_cache }}/ndk/25.2.9519653
+          key: ndk-r25c-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ndk-r25c-${{ runner.os }}-
+
       - name: Instalar NDK r25c
-        run: sdkmanager --install "ndk;25.2.9519653"
+        run: |
+          if [ ! -d "/usr/local/lib/android/sdk/ndk/25.2.9519653" ]; then
+            sdkmanager --install "ndk;25.2.9519653"
+          else
+            echo "NDK ya está cacheado, saltando descarga."
+          fi
 
       - name: Generar Gradle Wrapper (si no existe)
         run: |
