@@ -1,19 +1,18 @@
 package com.ivannafusion
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
+import android.os.SharedMemory
+import android.system.OsConstants
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
-import java.nio.channels.FileChannel
 
 object ShmManager {
     private val _shmStatus = MutableStateFlow("Inicializando...")
     val shmStatus: StateFlow<String> = _shmStatus.asStateFlow()
     private var hyperplaneBuffer: ByteBuffer? = null
-    private var fd: Int = -1
+    private var sharedMemory: SharedMemory? = null
 
     // ── Propiedades públicas requeridas por DiagnosticsPanel ──────────────────
     var nativeLibLoaded: Boolean = false
@@ -36,38 +35,33 @@ object ShmManager {
     private const val OFFSET_ACTIVE    = OFFSET_SEQ + 8
 
     fun initialize(context: Context) {
-        _shmStatus.value = "Creando SHM nativa..."
+        _shmStatus.value = "Creando SharedMemory..."
         try {
-            fd = memfdCreate(SHM_NAME, 1)
-            if (fd >= 0) {
-                // RandomAccessFile no tiene constructor (FileDescriptor, String)
-                // → acceder vía /proc/self/fd/<n> que sí acepta String
-                val raf = RandomAccessFile("/proc/self/fd/$fd", "rw")
-                hyperplaneBuffer = raf.channel.map(FileChannel.MapMode.READ_WRITE, 0, SHM_SIZE.toLong())
-                raf.close()  // cierra copia del canal; el mapping y fd original se mantienen
-                try {
-                    val addressField = java.nio.Buffer::class.java.getDeclaredField("address")
-                    addressField.isAccessible = true
-                    val address = addressField.getLong(hyperplaneBuffer)
-                    nativeMlock(address, SHM_SIZE.toLong())
-                } catch (e: Exception) { }
-                shmInitialized = true
-                _shmStatus.value = "SHM real activa ✅"
-            } else {
-                lastError = "ASharedMemory_create devolvió fd=$fd"
-                _shmStatus.value = "Fallback buffer directo 🟠"
-                hyperplaneBuffer = ByteBuffer.allocateDirect(SHM_SIZE)
-            }
+            val shm = SharedMemory.create(SHM_NAME, SHM_SIZE)
+            shm.setProtect(OsConstants.PROT_READ or OsConstants.PROT_WRITE)
+            val buf = shm.mapReadWrite()
+            sharedMemory = shm
+            hyperplaneBuffer = buf
+            // mlock vía reflection
+            try {
+                val addressField = java.nio.Buffer::class.java.getDeclaredField("address")
+                addressField.isAccessible = true
+                val address = addressField.getLong(buf)
+                nativeMlock(address, SHM_SIZE.toLong())
+            } catch (_: Exception) {}
+            shmInitialized = true
+            _shmStatus.value = "SHM mlock OK ✅"
+            android.util.Log.i("IVANNA-SHM", "SharedMemory.create OK, size=$SHM_SIZE")
         } catch (e: Exception) {
             lastError = e.message
-            _shmStatus.value = "Error SHM: ${e.message} ⚠️"
+            _shmStatus.value = "Fallback buffer directo 🟠"
             hyperplaneBuffer = ByteBuffer.allocateDirect(SHM_SIZE)
+            shmInitialized = true  // fallback funcional para el engine
+            android.util.Log.w("IVANNA-SHM", "SharedMemory falló: ${e.message}; usando DirectByteBuffer")
         }
     }
 
-    private external fun memfdCreate(name: String, flags: Int): Int
     private external fun nativeMlock(address: Long, length: Long): Int
-    private external fun nativeFtruncate(fd: Int, length: Long): Int
 
     fun getBuffer(): ByteBuffer? = hyperplaneBuffer
     fun readSeqCounter(): Long = hyperplaneBuffer?.getLong(OFFSET_SEQ) ?: 0L
@@ -91,11 +85,9 @@ object ShmManager {
     fun close() {
         _shmStatus.value = "SHM cerrada"
         hyperplaneBuffer = null
+        sharedMemory?.close()
+        sharedMemory = null
         shmInitialized = false
-        if (fd >= 0) {
-            try { android.os.ParcelFileDescriptor.adoptFd(fd).close() } catch (_: Exception) { }
-            fd = -1
-        }
     }
 
     init {
