@@ -20,10 +20,12 @@ add_library(ivanna_trascendental SHARED ${IVANNA_SOURCES})
 find_library(log-lib log)
 find_library(android-lib android)
 find_library(OpenSLES-lib OpenSLES)
+find_library(aaudio-lib aaudio)
 
 target_link_libraries(ivanna_trascendental
     ${log-lib}
     ${android-lib}
     ${OpenSLES-lib}
+    ${aaudio-lib}
     -fopenmp
 )
