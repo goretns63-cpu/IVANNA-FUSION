@@ -61,7 +61,7 @@ fun SettingsAuditScreen(navController: NavController) {
             listOf(44100, 48000, 96000, 192000, 384000).forEach { rate ->
                 FilterChip(
                     selected = selectedSampleRate == rate,
-                    onClick = { selectedSampleRate = rate },
+                    onClick = { selectedSampleRate = rate; AudioEngine.audio_fs_hz = rate },
                     label = { Text("${rate / 1000} kHz") },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = Color.Cyan,
@@ -82,7 +82,7 @@ fun SettingsAuditScreen(navController: NavController) {
             listOf(16, 24, 32).forEach { bits ->
                 FilterChip(
                     selected = selectedBitDepth == bits,
-                    onClick = { selectedBitDepth = bits },
+                    onClick = { selectedBitDepth = bits; AudioEngine.audio_bit_depth = bits },
                     label = { Text("$bits bits") },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = Color.Cyan,
@@ -152,7 +152,6 @@ fun SettingsAuditScreen(navController: NavController) {
 
 @Composable
 fun DeveloperPanel() {
-    val shmBuffer = ShmManager.getBuffer()
     var seqCounter by remember { mutableLongStateOf(0L) }
     var activeBuffer by remember { mutableIntStateOf(0) }
 

@@ -50,7 +50,10 @@ fun SimbiosisScreen(navController: NavController) {
     LaunchedEffect(Unit) {
         Log.d(TAG, "SimbiosisScreen iniciada")
         gestureDetector.setCallbacks(
-            wristTwist = { delta -> fusionLevel = (fusionLevel + delta * 0.1f).coerceIn(0f, 1f) },
+            wristTwist = { delta ->
+                fusionLevel = (fusionLevel + delta * 0.1f).coerceIn(0f, 1f)
+                AudioEngine.setFusionLevel(fusionLevel)
+            },
             pinchRotate = { },
             threeFingerSwipe = { navController.navigate("settings") },
             doubleTapLatency = { },
@@ -74,9 +77,9 @@ fun SimbiosisScreen(navController: NavController) {
     if (showGrandpaMode) {
         GrandpaModeOverlay(
             onDismiss = { showGrandpaMode = false },
-            onMagic = { fusionLevel = 1.0f },
-            onSilence = { fusionLevel = 0f },
-            onReset = { fusionLevel = 0.5f }
+            onMagic = { fusionLevel = 1.0f; AudioEngine.setFusionLevel(1.0f) },
+            onSilence = { fusionLevel = 0f; AudioEngine.setFusionLevel(0f) },
+            onReset = { fusionLevel = 0.5f; AudioEngine.setFusionLevel(0.5f) }
         )
     } else if (showDiagnostics) {
         DiagnosticsPanel(onDismiss = { showDiagnostics = false })
@@ -136,7 +139,10 @@ fun SimbiosisScreen(navController: NavController) {
 
                 FusionDial(
                     level = fusionLevel,
-                    onLevelChange = { fusionLevel = it },
+                    onLevelChange = { newLevel ->
+                        fusionLevel = newLevel
+                        AudioEngine.setFusionLevel(newLevel)
+                    },
                     modifier = Modifier.size(200.dp)
                 )
 

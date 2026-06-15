@@ -129,7 +129,9 @@ void warpedFrequencyTransform(float *coefs, float lambda) {
 
 // Función principal de predicción
 extern "C" JNIEXPORT void JNICALL
-Java_com_ivannafusion_AudioEngine_nativePredictSamples(JNIEnv *env, jobject thiz, jlong handle, jfloatArray input, jfloatArray output, jint n) {
+Java_com_ivannafusion_AudioEngine_nativePredictSamples(JNIEnv *env, jobject /*thiz*/, jlong /*handle*/, jfloatArray input, jfloatArray output, jint n) {
+    static bool initialized = false;
+    if (!initialized) { kalmanInit(); initialized = true; }
     jfloat *inBuf = env->GetFloatArrayElements(input, nullptr);
     jfloat *outBuf = env->GetFloatArrayElements(output, nullptr);
     

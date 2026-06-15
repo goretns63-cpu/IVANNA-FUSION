@@ -37,11 +37,15 @@ fun MonitorScreen(navController: NavController) {
     var temp_gpu by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
+        AudioEngine.initializeEvolution()
         while (true) {
             audio_latencia_us = AudioEngine.getLatencyMicros()
             audio_error_fase_rms = AudioEngine.getPhaseErrorRms()
             temp_cpu_core0 = ThermalMonitor.temp_cpu_core0.toInt()
             temp_gpu = ThermalMonitor.temp_gpu.toInt()
+            AudioEngine.evolveStep()
+            evo_generacion = AudioEngine.getGeneration()
+            evo_fitness_mejor = AudioEngine.getBestFitness()
             delay(100)
         }
     }

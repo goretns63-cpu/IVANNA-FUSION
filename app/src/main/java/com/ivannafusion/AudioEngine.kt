@@ -1,6 +1,8 @@
 /*
  * IVANNA-FUSION TRASCENDENTAL
  * © 2025 Luis Uriel Pimentel Pérez. Todos los derechos reservados.
+ * Prohibida la copia, distribución, ingeniería inversa o cualquier uso no autorizado.
+ * Quien infrinja será perseguido penal y civilmente.
  */
 
 package com.ivannafusion
@@ -11,6 +13,9 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Process
+import android.util.Log
+
+private const val TAG = "IVANNA-Audio"
 
 object AudioEngine {
     private var audioTrack: AudioTrack? = null
@@ -18,36 +23,48 @@ object AudioEngine {
     var initialized = false
 
     var audio_fs_hz: Int = 48_000
-    var audio_bit_depth: Int = 32   // siempre float-32; PROPERTY_OUTPUT_FRAMES_PER_BUFFER
-                                    // devuelve tamaño de buffer en frames, NO bit depth
+    var audio_bit_depth: Int = 32
     var audio_latencia_us: Int = 0
 
     fun initialize(context: Context) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
 
-        // Usar el context real, no IVANNAApplication() que tiene mBase=null → NPE
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-
-        // PROPERTY_OUTPUT_SAMPLE_RATE ya refleja el DAC USB si es la salida activa
         val nativeRate = audioManager
             ?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)
             ?.toIntOrNull() ?: 48_000
-        // AudioTrack max = 192 kHz en el mejor caso; 384 kHz no está soportado → ERROR_BAD_VALUE
         audio_fs_hz = nativeRate.coerceIn(8_000, 192_000)
 
         nativeHandle = nativeCreateEngine(audio_fs_hz, audio_bit_depth)
+        if (nativeHandle == 0L) {
+            Log.e(TAG, "nativeCreateEngine retornó 0; stream AAudio no disponible")
+        }
+
+        // Conectar hiperplano SHM al engine nativo
+        val shmBuf = ShmManager.getBuffer()
+        if (shmBuf != null && nativeHandle != 0L) {
+            try {
+                val addressField = java.nio.Buffer::class.java.getDeclaredField("address")
+                addressField.isAccessible = true
+                val address = addressField.getLong(shmBuf)
+                nativeSetHyperplane(address)
+                Log.i(TAG, "Hyperplane SHM conectado al engine nativo")
+            } catch (e: Exception) {
+                Log.w(TAG, "No se pudo conectar hyperplane: ${e.message}")
+            }
+        }
+
         startAudioTrack()
+        if (nativeHandle != 0L) nativeStartProcessing(nativeHandle)
         initialized = true
     }
 
     private fun startAudioTrack() {
-        // ENCODING_PCM_FLOAT: 32-bit float, API 21+, alineado con AAUDIO_FORMAT_PCM_FLOAT
         var bufferSize = AudioTrack.getMinBufferSize(
             audio_fs_hz,
             AudioFormat.CHANNEL_OUT_STEREO,
             AudioFormat.ENCODING_PCM_FLOAT
         )
-        // Si la tasa nativa no es soportada, cae a 48 kHz
         if (bufferSize <= 0) {
             audio_fs_hz = 48_000
             bufferSize = AudioTrack.getMinBufferSize(
@@ -57,55 +74,93 @@ object AudioEngine {
             )
         }
 
-        audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setSampleRate(audio_fs_hz)
-                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                    .build()
-            )
-            .setBufferSizeInBytes(bufferSize * 2)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            .build()
-
-        audioTrack?.play()
-        nativeStartProcessing(nativeHandle)
+        try {
+            audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(audio_fs_hz)
+                        .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                        .build()
+                )
+                .setBufferSizeInBytes(bufferSize * 2)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                .build()
+            audioTrack?.play()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error iniciando AudioTrack: ${e.message}")
+        }
     }
 
     fun getLatencyMicros(): Int {
-        audio_latencia_us = nativeGetLatency(nativeHandle)
+        audio_latencia_us = if (nativeHandle != 0L) nativeGetLatency(nativeHandle) else 0
         return audio_latencia_us
     }
 
     fun setFusionLevel(level: Float) {
-        nativeSetFusionLevel(nativeHandle, level.coerceIn(0f, 1f))
+        if (nativeHandle != 0L) nativeSetFusionLevel(nativeHandle, level.coerceIn(0f, 1f))
     }
 
-    fun getPhaseErrorRms(): Float = nativeGetPhaseError(nativeHandle)
+    fun getPhaseErrorRms(): Float =
+        if (nativeHandle != 0L) nativeGetPhaseError(nativeHandle) else 0f
+
+    // ── Evolutionary kernel ──────────────────────────────────────────────────
+    fun initializeEvolution() {
+        if (nativeHandle != 0L) nativeInitializeEvolution()
+    }
+
+    fun getBestFitness(): Float =
+        if (nativeHandle != 0L) nativeGetBestFitness() else 0f
+
+    fun getGeneration(): Int =
+        if (nativeHandle != 0L) nativeGetGeneration() else 0
+
+    fun evolveStep() {
+        if (nativeHandle != 0L) nativeEvolveStep()
+    }
+
+    // ── Phase oracle ─────────────────────────────────────────────────────────
+    fun predictSamples(input: FloatArray, output: FloatArray) {
+        if (nativeHandle != 0L && input.size == output.size)
+            nativePredictSamples(nativeHandle, input, output, input.size)
+    }
 
     fun shutdown() {
-        nativeDestroyEngine(nativeHandle)
+        if (nativeHandle != 0L) nativeDestroyEngine(nativeHandle)
         audioTrack?.stop()
         audioTrack?.release()
         audioTrack = null
+        initialized = false
     }
 
+    // ── JNI declarations ─────────────────────────────────────────────────────
     private external fun nativeCreateEngine(sampleRate: Int, bitDepth: Int): Long
     private external fun nativeStartProcessing(handle: Long)
     private external fun nativeGetLatency(handle: Long): Int
     private external fun nativeSetFusionLevel(handle: Long, level: Float)
     private external fun nativeGetPhaseError(handle: Long): Float
     private external fun nativeDestroyEngine(handle: Long)
+    private external fun nativeSetHyperplane(address: Long)
+
+    private external fun nativeInitializeEvolution()
+    private external fun nativeGetBestFitness(): Float
+    private external fun nativeGetGeneration(): Int
+    private external fun nativeEvolveStep()
+    private external fun nativePredictSamples(handle: Long, input: FloatArray, output: FloatArray, n: Int)
 
     init {
-        System.loadLibrary("ivanna_trascendental")
+        try {
+            System.loadLibrary("ivanna_trascendental")
+            Log.i(TAG, "Librería nativa cargada correctamente")
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "ERROR: No se pudo cargar librería nativa: ${e.message}")
+        }
     }
 }
