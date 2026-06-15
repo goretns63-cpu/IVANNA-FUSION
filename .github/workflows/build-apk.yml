@@ -37,8 +37,14 @@ jobs:
       # Sube tu keystore real como secreto en Base64:
       #   base64 -w0 ivanna-keystore.jks  -> pega el resultado en el secreto IVANNA_KEYSTORE_B64
       - name: Restaurar keystore desde secreto
-        if: ${{ secrets.IVANNA_KEYSTORE_B64 != '' }}
-        run: echo "${{ secrets.IVANNA_KEYSTORE_B64 }}" | base64 -d > ivanna-keystore.jks
+        env:
+          KEYSTORE_B64: ${{ secrets.IVANNA_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > ivanna-keystore.jks
+          else
+            echo "IVANNA_KEYSTORE_B64 no configurado; se omite restauración del keystore."
+          fi
 
       - name: Compilar APK release
         env:
