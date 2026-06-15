@@ -8,6 +8,7 @@
 package com.ivannafusion
 
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Process
 import android.widget.Toast
@@ -26,12 +27,16 @@ import java.io.File
 import java.security.MessageDigest
 
 class MainActivity : ComponentActivity() {
-    private val requiredPermissions = arrayOf(
-        android.Manifest.permission.RECORD_AUDIO,
-        android.Manifest.permission.MODIFY_AUDIO_SETTINGS,
-        android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        android.Manifest.permission.VIBRATE
-    )
+    // Solo permisos dangerous que el sistema puede mostrar en runtime.
+    // MODIFY_AUDIO_SETTINGS y VIBRATE son protection=normal → se otorgan en instalación.
+    // WRITE_EXTERNAL_STORAGE está bloqueado en API 30+ con targetSdk >= 30.
+    // READ_MEDIA_AUDIO reemplaza READ_EXTERNAL_STORAGE en API 33+.
+    private val requiredPermissions: Array<String> = buildList {
+        add(android.Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(android.Manifest.permission.READ_MEDIA_AUDIO)
+        }
+    }.toTypedArray()
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
