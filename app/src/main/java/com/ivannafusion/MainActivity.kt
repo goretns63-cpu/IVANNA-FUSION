@@ -7,10 +7,13 @@
 
 package com.ivannafusion
 
+import android.app.AlertDialog
+import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
+import android.net.Uri
 import android.os.Bundle
 import android.os.Process
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -27,16 +31,10 @@ import java.io.File
 import java.security.MessageDigest
 
 class MainActivity : ComponentActivity() {
-    // Solo permisos dangerous que el sistema puede mostrar en runtime.
-    // MODIFY_AUDIO_SETTINGS y VIBRATE son protection=normal → se otorgan en instalación.
-    // WRITE_EXTERNAL_STORAGE está bloqueado en API 30+ con targetSdk >= 30.
-    // READ_MEDIA_AUDIO reemplaza READ_EXTERNAL_STORAGE en API 33+.
-    private val requiredPermissions: Array<String> = buildList {
-        add(android.Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(android.Manifest.permission.READ_MEDIA_AUDIO)
-        }
-    }.toTypedArray()
+    // RECORD_AUDIO es el único permiso dangerous que realmente se necesita.
+    // MODIFY_AUDIO_SETTINGS y VIBRATE son protection=normal → otorgados en instalación.
+    // READ_MEDIA_AUDIO no se usa: no hay AudioRecord ni lectura de archivos de audio.
+    private val requiredPermissions = arrayOf(android.Manifest.permission.RECORD_AUDIO)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -44,8 +42,29 @@ class MainActivity : ComponentActivity() {
         if (permissions.all { it.value }) {
             initializeTrascendental()
         } else {
-            Toast.makeText(this, "Permisos denegados. IVANNA no puede operar.", Toast.LENGTH_LONG).show()
-            finish()
+            // Comprobar si fue denegación permanente ("No volver a preguntar")
+            val permanentlyDenied = requiredPermissions.any { perm ->
+                !ActivityCompat.shouldShowRequestPermissionRationale(this, perm) &&
+                ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_DENIED
+            }
+            if (permanentlyDenied) {
+                AlertDialog.Builder(this)
+                    .setTitle("Permiso requerido")
+                    .setMessage("El permiso de micrófono fue denegado permanentemente. " +
+                        "Ve a Ajustes → Aplicaciones → IVANNA-FUSION → Permisos y activa Micrófono.")
+                    .setPositiveButton("Abrir Ajustes") { _, _ ->
+                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", packageName, null)
+                        })
+                        finish()
+                    }
+                    .setNegativeButton("Cancelar") { _, _ -> finish() }
+                    .setCancelable(false)
+                    .show()
+            } else {
+                Toast.makeText(this, "Permisos denegados. IVANNA no puede operar.", Toast.LENGTH_LONG).show()
+                finish()
+            }
         }
     }
 
