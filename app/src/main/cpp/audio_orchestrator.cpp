@@ -1,3 +1,4 @@
+=== audio_orchestrator.cpp ===
 /*
  * IVANNA-FUSION TRASCENDENTAL
  * © 2025 Luis Uriel Pimentel Pérez. Todos los derechos reservados.
@@ -10,7 +11,6 @@
 #include <cstring>
 #include <ctime>
 #include <arm_neon.h>
-#include <omp.h>
 
 #define LOG_TAG "IVANNA-Audio"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -34,13 +34,13 @@ struct AudioEngine {
     int sampleRate = 384000;
     int bitDepth = 32;
     int64_t frameCounter = 0;
-    
+
     // Buffers de doble buffer
     float bufferA[512];
     float bufferB[512];
     float *activeBuffer = bufferA;
     float *processBuffer = bufferB;
-    
+
     // Estado Kalman
     float kalman_phase = 0.0f;
     float kalman_freq = 1000.0f;
@@ -57,28 +57,26 @@ inline float processBiquad(float in, float *state, const int32_t *coefs) {
     float b2 = static_cast<float>(coefs[2]) / 16777216.0f;
     float a1 = static_cast<float>(coefs[3]) / 16777216.0f;
     float a2 = static_cast<float>(coefs[4]) / 16777216.0f;
-    
+
     float out = b0 * in + state[0];
     state[0] = b1 * in - a1 * out + state[1];
     state[1] = b2 * in - a2 * out;
     return out;
 }
 
-// Procesamiento de audio con NEON
+// Procesamiento de audio con NEON (sin OpenMP)
 void processAudioBlock(float *input, float *output, int numFrames) {
-    // Procesar bancos de biquads en paralelo
-    #pragma omp parallel for
     for (int frame = 0; frame < numFrames; frame += 4) {
         float32x4_t sample = vld1q_f32(&input[frame]);
-        
+
         // Aplicar biquads (simplificado: primer banco)
         if (g_engine.hyperplane) {
             // Procesamiento DSP-IA fusionado
             float fusion = g_engine.fusion_level;
-            
+
             // Kalman prediction influence
             float predicted = g_engine.kalman_phase * fusion;
-            
+
             // Aplicar a muestras
             float vals[4];
             vst1q_f32(vals, sample);
@@ -90,7 +88,7 @@ void processAudioBlock(float *input, float *output, int numFrames) {
             vst1q_f32(&output[frame], sample);
         }
     }
-    
+
     g_engine.frameCounter += numFrames;
 }
 
@@ -102,24 +100,24 @@ aaudio_data_callback_result_t audioCallback(
     int32_t numFrames
 ) {
     float *out = static_cast<float*>(audioData);
-    
+
     // Doble buffer swap
     float *current = g_engine.activeBuffer;
     float *next = (g_engine.activeBuffer == g_engine.bufferA) ? g_engine.bufferB : g_engine.bufferA;
-    
+
     // Procesar
     processAudioBlock(current, out, numFrames);
-    
+
     // Preparar siguiente buffer
     g_engine.activeBuffer = next;
-    
+
     // Actualizar contador de secuencia
     if (g_engine.hyperplane) {
         g_engine.hyperplane->seq_counter++;
         g_engine.hyperplane->active_buffer = 
             (g_engine.activeBuffer == g_engine.bufferA) ? 0 : 1;
     }
-    
+
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
@@ -129,10 +127,10 @@ JNIEXPORT jlong JNICALL
 Java_com_ivannafusion_AudioEngine_nativeCreateEngine(JNIEnv *env, jobject thiz, jint sampleRate, jint bitDepth) {
     g_engine.sampleRate = sampleRate;
     g_engine.bitDepth = bitDepth;
-    
+
     AAudioStreamBuilder *builder;
     AAudio_createStreamBuilder(&builder);
-    
+
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
@@ -140,20 +138,20 @@ Java_com_ivannafusion_AudioEngine_nativeCreateEngine(JNIEnv *env, jobject thiz, 
     AAudioStreamBuilder_setChannelCount(builder, 2);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setDataCallback(builder, audioCallback, nullptr);
-    
+
     aaudio_result_t result = AAudioStreamBuilder_openStream(builder, &g_engine.stream);
     AAudioStreamBuilder_delete(builder);
-    
+
     if (result != AAUDIO_OK) {
         LOGE("Failed to open stream: %d", result);
         return 0;
     }
-    
+
     // Obtener tamaño de buffer óptimo
     int32_t bufferSize = AAudioStream_getBufferSizeInFrames(g_engine.stream);
     LOGI("Audio engine created: %d Hz, %d bits, buffer: %d frames", 
          sampleRate, bitDepth, bufferSize);
-    
+
     return reinterpret_cast<jlong>(&g_engine);
 }
 
@@ -196,3 +194,34 @@ Java_com_ivannafusion_AudioEngine_nativeDestroyEngine(JNIEnv *env, jobject thiz,
 }
 
 } // extern "C"
+
+
+
+=== CMakeLists.txt ===
+# IVANNA-FUSION TRASCENDENTAL
+# © 2025 Luis Uriel Pimentel Pérez. Todos los derechos reservados.
+
+cmake_minimum_required(VERSION 3.22.1)
+project("ivanna_trascendental")
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -ffast-math -funroll-loops -march=armv8.2-a+fp16+dotprod -fPIC -Wall -Wextra")
+
+set(IVANNA_SOURCES
+    audio_orchestrator.cpp
+    phase_oracle.cpp
+    evolutionary_kernel.cpp
+    shm_hyperplane.cpp
+)
+
+add_library(ivanna_trascendental SHARED ${IVANNA_SOURCES})
+
+find_library(log-lib log)
+find_library(android-lib android)
+find_library(OpenSLES-lib OpenSLES)
+
+target_link_libraries(ivanna_trascendental
+    ${log-lib}
+    ${android-lib}
+    ${OpenSLES-lib}
+)
