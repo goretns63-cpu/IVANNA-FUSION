@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project("ivanna_trascendental")
 
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -ffast-math -funroll-loops -march=armv8.2-a+fp16+dotprod -fopenmp -fPIC -Wall -Wextra")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -ffast-math -funroll-loops -march=armv8.2-a+fp16+dotprod -fopenmp -static-openmp -fPIC -Wall -Wextra")
 
 # Fuentes nativas
 set(IVANNA_SOURCES
@@ -27,5 +27,5 @@ target_link_libraries(ivanna_trascendental
     ${android-lib}
     ${OpenSLES-lib}
     ${aaudio-lib}
-    -fopenmp
+    -fopenmp -static-openmp
 )
