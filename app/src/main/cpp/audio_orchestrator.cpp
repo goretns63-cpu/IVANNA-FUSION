@@ -8,6 +8,7 @@
 #include <android/log.h>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <arm_neon.h>
 #include <omp.h>
 

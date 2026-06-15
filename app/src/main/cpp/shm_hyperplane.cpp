@@ -9,6 +9,7 @@
 #include <sys/syscall.h>
 #include <linux/memfd.h>
 #include <unistd.h>
+#include <cerrno>
 #include <android/log.h>
 
 #define LOG_TAG "IVANNA-SHM"
