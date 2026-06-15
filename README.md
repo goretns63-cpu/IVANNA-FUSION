@@ -68,3 +68,4 @@ faltaban. **El proyecto ya está completo** según el árbol original
 ## 🛠️ Compilación local (alternativa)
 Ver `docs/instrucciones_compilacion.md` para el flujo en Android Studio con
 tu Moto G85.
+ 
