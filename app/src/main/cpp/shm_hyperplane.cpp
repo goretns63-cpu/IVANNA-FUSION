@@ -5,6 +5,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <sys/mman.h>
+#include <errno.h>
 
 #define LOG_TAG "IVANNA-SHM-NATIVE"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
