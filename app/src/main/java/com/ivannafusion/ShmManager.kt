@@ -8,19 +8,18 @@
 package com.ivannafusion
 
 import android.content.Context
+import android.os.SharedMemory
+import android.system.OsConstants
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.File
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
-import java.nio.channels.FileChannel
 
 private const val TAG = "IVANNA-SHM"
 
 object ShmManager {
-    // NUEVO: Estado observable para UI
+    // Estado observable para la UI
     private val _shmStatus = MutableStateFlow("Inicializando...")
     val shmStatus: StateFlow<String> = _shmStatus.asStateFlow()
 
@@ -28,12 +27,12 @@ object ShmManager {
     var shmInitialized = false
     var lastError: String? = null
 
-    private const val SHM_SIZE = 2 * 1024 * 1024
+    private const val SHM_SIZE = 2 * 1024 * 1024  // 2 MiB
     private const val SHM_NAME = "ivanna_hyperplane"
 
     private var hyperplaneBuffer: ByteBuffer? = null
-    private var fd: Int = -1
 
+    // Offsets de las estructuras (igual que en la versión original)
     private const val OFFSET_BIQUAD = 0
     private const val OFFSET_KALMAN = OFFSET_BIQUAD + (64 * 5 * 4)
     private const val OFFSET_POBLACION = OFFSET_KALMAN + (3 * 4)
@@ -43,49 +42,41 @@ object ShmManager {
     private const val OFFSET_ACTIVE = OFFSET_SEQ + 8
 
     fun initialize(context: Context) {
-        Log.i(TAG, "Inicializando ShmManager...")
-        _shmStatus.value = "Inicializando SHM..."
+        Log.i(TAG, "Inicializando ShmManager con SharedMemory...")
+        _shmStatus.value = "Creando SharedMemory..."
+
         try {
-            fd = memfdCreate(SHM_NAME, 1)
-            if (fd >= 0) {
-                Log.i(TAG, "memfd_create exitoso fd=$fd")
-                _shmStatus.value = "memfd_create OK"
-                nativeFtruncate(fd, SHM_SIZE.toLong())
-                val raf = RandomAccessFile("/proc/self/fd/$fd", "rw")
-                hyperplaneBuffer = raf.channel.map(FileChannel.MapMode.READ_WRITE, 0, SHM_SIZE.toLong())
-                raf.close()
-                try {
-                    val addressField = java.nio.Buffer::class.java.getDeclaredField("address")
-                    addressField.isAccessible = true
-                    val address = addressField.getLong(hyperplaneBuffer)
-                    nativeMlock(address, SHM_SIZE.toLong())
-                    _shmStatus.value = "SHM mlock OK"
-                } catch (e: Exception) {
-                    Log.w(TAG, "mlock no disponible: ${e.message}")
-                    _shmStatus.value = "mlock falló, pero SHM funciona"
-                }
-            } else {
-                Log.w(TAG, "memfd_create falló, usando fallback a archivo temporal")
-                _shmStatus.value = "Fallback a archivo temporal"
-                val shmFile = File(context.cacheDir, "$SHM_NAME.tmp")
-                val raf = RandomAccessFile(shmFile, "rw")
-                raf.setLength(SHM_SIZE.toLong())
-                hyperplaneBuffer = raf.channel.map(FileChannel.MapMode.READ_WRITE, 0, SHM_SIZE.toLong())
-                raf.close()
-            }
+            // Usar SharedMemory.create (API 27+)
+            val shm = SharedMemory.create(SHM_NAME, SHM_SIZE)
+            shm.setProtect(OsConstants.PROT_READ or OsConstants.PROT_WRITE)
+            hyperplaneBuffer = shm.mapReadWrite()
+            _shmStatus.value = "SHM real activa ✅"
+            Log.i(TAG, "SharedMemory creada y mapeada correctamente")
             shmInitialized = true
-            _shmStatus.value = "SHM inicializada correctamente"
-            Log.i(TAG, "ShmManager inicializado correctamente")
+
+            // Si se necesita mlock, se puede hacer sobre el buffer mapeado
+            try {
+                val addressField = java.nio.Buffer::class.java.getDeclaredField("address")
+                addressField.isAccessible = true
+                val address = addressField.getLong(hyperplaneBuffer)
+                nativeMlock(address, SHM_SIZE.toLong())
+                _shmStatus.value = "SHM mlock OK"
+            } catch (e: Exception) {
+                Log.w(TAG, "mlock no disponible: ${e.message}")
+                _shmStatus.value = "mlock falló, pero SHM funciona"
+            }
         } catch (e: Exception) {
-            lastError = "SHM: ${e.message}"
-            _shmStatus.value = "Error SHM: ${e.message}"
-            Log.e(TAG, "Error ShmManager: ${e.message}", e)
+            lastError = "SharedMemory: ${e.message}"
+            _shmStatus.value = "Error SharedMemory: ${e.message} ⚠️"
+            Log.e(TAG, "Error creando SharedMemory, usando buffer directo: ${e.message}", e)
             hyperplaneBuffer = ByteBuffer.allocateDirect(SHM_SIZE)
             shmInitialized = true
-            _shmStatus.value = "Usando buffer directo (fallback)"
+            _shmStatus.value = "Usando buffer directo (fallback) 🟠"
         }
     }
 
+    // Las siguientes funciones nativas ya no son necesarias para crear SHM,
+    // pero se mantienen como stubs para evitar UnsatisfiedLinkError
     private external fun nativeMlock(address: Long, length: Long): Int
     private external fun memfdCreate(name: String, flags: Int): Int
     private external fun nativeFtruncate(fd: Int, length: Long): Int
@@ -137,7 +128,8 @@ object ShmManager {
 
     fun close() {
         _shmStatus.value = "SHM cerrada"
-        // liberar recursos si necesario
+        hyperplaneBuffer = null
+        shmInitialized = false
     }
 
     init {
