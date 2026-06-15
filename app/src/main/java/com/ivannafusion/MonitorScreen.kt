@@ -25,7 +25,11 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 @Composable
-fun MonitorScreen(navController: NavController) {
+fun MonitorScreen(
+    navController: NavController,
+    audioEngine: AudioEngine,
+    shmManager: ShmManager
+) {
     val context = LocalContext.current
     var audio_fs_hz by remember { mutableIntStateOf(AudioEngine.audio_fs_hz) }
     var audio_bit_depth by remember { mutableIntStateOf(AudioEngine.audio_bit_depth) }
@@ -35,6 +39,9 @@ fun MonitorScreen(navController: NavController) {
     var evo_fitness_mejor by remember { mutableFloatStateOf(0f) }
     var temp_cpu_core0 by remember { mutableIntStateOf(0) }
     var temp_gpu by remember { mutableIntStateOf(0) }
+
+    // Estado del SHM (observable)
+    val shmStatus by shmManager.shmStatus.collectAsState()
 
     LaunchedEffect(Unit) {
         AudioEngine.initializeEvolution()
@@ -63,7 +70,17 @@ fun MonitorScreen(navController: NavController) {
             fontWeight = FontWeight.Bold
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Mostrar estado de la memoria compartida
+        Text(
+            text = "SHM: $shmStatus",
+            color = Color.Green,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Métricas canónicas
         MetricRow("audio_fs_hz", "$audio_fs_hz Hz")
@@ -74,6 +91,17 @@ fun MonitorScreen(navController: NavController) {
         MetricRow("evo_fitness_mejor", "%.4f".format(evo_fitness_mejor))
         MetricRow("temp_cpu_core0", "$temp_cpu_core0 °C")
         MetricRow("temp_gpu", "$temp_gpu °C")
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Botón para reiniciar el motor de audio y SHM
+        Button(
+            onClick = { audioEngine.restart() },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+        ) {
+            Text("REINICIAR AUDIO", color = Color.White)
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
