@@ -5,11 +5,13 @@
 
 package com.ivannafusion
 
-import android.view.MotionEvent
+import android.content.pm.PackageManager
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,9 +22,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInteropFilter
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,6 +31,8 @@ import androidx.navigation.NavController
 import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
+
+private const val TAG = "IVANNA-UI"
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -41,23 +43,27 @@ fun SimbiosisScreen(navController: NavController) {
     var phaseError by remember { mutableFloatStateOf(0f) }
     var isPredictionActive by remember { mutableStateOf(true) }
     var showGrandpaMode by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
 
     val gestureDetector = remember { IVANNAGestureDetector(context) }
 
     LaunchedEffect(Unit) {
+        Log.d(TAG, "SimbiosisScreen iniciada")
         gestureDetector.setCallbacks(
             wristTwist = { delta -> fusionLevel = (fusionLevel + delta * 0.1f).coerceIn(0f, 1f) },
-            pinchRotate = { delta -> /* Ajustar ancho de banda */ },
+            pinchRotate = { },
             threeFingerSwipe = { navController.navigate("settings") },
-            doubleTapLatency = { /* Reset contadores */ },
+            doubleTapLatency = { },
             twoFingerCircle = { active -> isPredictionActive = active }
         )
         gestureDetector.register()
 
         while (true) {
-            latencyUs = AudioEngine.getLatencyMicros()
-            phaseError = AudioEngine.getPhaseErrorRms()
-            delay(16) // 60 Hz
+            try {
+                latencyUs = AudioEngine.getLatencyMicros()
+                phaseError = AudioEngine.getPhaseErrorRms()
+            } catch (e: Exception) { }
+            delay(200)
         }
     }
 
@@ -72,17 +78,18 @@ fun SimbiosisScreen(navController: NavController) {
             onSilence = { fusionLevel = 0f },
             onReset = { fusionLevel = 0.5f }
         )
+    } else if (showDiagnostics) {
+        DiagnosticsPanel(onDismiss = { showDiagnostics = false })
     } else {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(Color(0xFF0A0A1A))
                 .pointerInteropFilter { event ->
                     gestureDetector.onTouchEvent(event)
                     true
                 }
         ) {
-            // Aura térmica en bordes
             val maxTemp = ThermalMonitor.getMaxTemperature()
             val thermalColor = when {
                 maxTemp < 50 -> Color.Blue
@@ -96,84 +103,192 @@ fun SimbiosisScreen(navController: NavController) {
                     .fillMaxSize()
                     .background(
                         Brush.radialGradient(
-                            colors = listOf(Color.Transparent, thermalColor.copy(alpha = 0.15f)),
+                            colors = listOf(Color.Transparent, thermalColor.copy(alpha = 0.1f)),
                             center = Offset.Infinite
                         )
                     )
             )
 
             Column(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Spacer(modifier = Modifier.height(40.dp))
+                Text(
+                    text = "IVANNA FUSION",
+                    color = Color.Cyan,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 32.dp, bottom = 4.dp)
+                )
 
-                // Dial circular de fusion_level
+                // BOTÓN DIAGNÓSTICO
+                Button(
+                    onClick = { showDiagnostics = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333)),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Text("DIAGNÓSTICO", fontSize = 10.sp, color = Color.Yellow)
+                }
+
                 FusionDial(
                     level = fusionLevel,
                     onLevelChange = { fusionLevel = it },
-                    modifier = Modifier.size(280.dp)
+                    modifier = Modifier.size(200.dp)
                 )
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Línea de tiempo dual (pasado + predicción)
                 DualTimeline(
                     isPredictionActive = isPredictionActive,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp)
-                        .padding(horizontal = 16.dp)
+                        .height(80.dp)
                 )
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Anillo de latencia
                 LatencyRing(
                     latencyUs = latencyUs,
-                    modifier = Modifier.size(200.dp)
+                    modifier = Modifier.size(140.dp)
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
                     text = "${latencyUs} µs",
                     color = when {
-                        latencyUs < 1000 -> Color.Green
-                        latencyUs < 2000 -> Color.Yellow
-                        latencyUs < 3000 -> Color(0xFFFFA500)
-                        else -> Color.Red
+                        latencyUs in 1..1000 -> Color.Green
+                        latencyUs in 1001..2000 -> Color.Yellow
+                        latencyUs in 2001..3000 -> Color(0xFFFFA500)
+                        else -> if (latencyUs <= 0) Color.Gray else Color.Red
                     },
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold
                 )
 
-                // Destello de satisfacción si latencia "negativa" (predicción activa y baja)
-                if (isPredictionActive && latencyUs < 1500) {
-                    SatisfactionFlash()
-                }
+                Text(
+                    text = "Error fase: %.4f rad".format(phaseError),
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Navegación inferior
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    Button(onClick = { navController.navigate("monitor") }) {
-                        Text("MONITOR")
+                    Button(
+                        onClick = { navController.navigate("monitor") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A3A))
+                    ) {
+                        Text("MONITOR", fontSize = 11.sp)
                     }
-                    Button(onClick = { showGrandpaMode = true }) {
-                        Text("MODO ABUELO")
+                    Button(
+                        onClick = { showGrandpaMode = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3A1A1A))
+                    ) {
+                        Text("ABUELO", fontSize = 11.sp)
                     }
-                    Button(onClick = { navController.navigate("settings") }) {
-                        Text("AJUSTES")
+                    Button(
+                        onClick = { navController.navigate("settings") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3A1A))
+                    ) {
+                        Text("AJUSTES", fontSize = 11.sp)
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun DiagnosticsPanel(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+
+    // Recolectar estado del sistema
+    val nativeLibStatus = if (ShmManager.nativeLibLoaded) "✓ CARGADA" else "✗ FALLÓ"
+    val nativeLibColor = if (ShmManager.nativeLibLoaded) Color.Green else Color.Red
+
+    val shmStatus = if (ShmManager.shmInitialized) "✓ OK" else "✗ FALLÓ"
+    val shmColor = if (ShmManager.shmInitialized) Color.Green else Color.Red
+
+    val audioInitStatus = if (AudioEngine.audio_fs_hz > 0) "✓ ${AudioEngine.audio_fs_hz}Hz" else "✗ NO INICIADO"
+    val audioColor = if (AudioEngine.audio_fs_hz > 0) Color.Green else Color.Red
+
+    val latencyStatus = AudioEngine.getLatencyMicros()
+    val latencyText = if (latencyStatus > 0) "$latencyStatus µs" else "NO DISPONIBLE"
+
+    // Verificar permisos
+    val recordPerm = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    val modifyPerm = context.checkSelfPermission(android.Manifest.permission.MODIFY_AUDIO_SETTINGS) == PackageManager.PERMISSION_GRANTED
+    val writePerm = context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0A0A1A))
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text(
+            "DIAGNÓSTICO DEL SISTEMA",
+            color = Color.Yellow,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        DiagRow("Librería nativa (.so)", nativeLibStatus, nativeLibColor)
+        DiagRow("Memoria compartida", shmStatus, shmColor)
+        DiagRow("Motor de audio", audioInitStatus, audioColor)
+        DiagRow("Latencia actual", latencyText, if (latencyStatus > 0) Color.Green else Color.Red)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text("PERMISOS:", color = Color.Cyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        DiagRow("RECORD_AUDIO", if (recordPerm) "✓ CONCEDIDO" else "✗ DENEGADO", if (recordPerm) Color.Green else Color.Red)
+        DiagRow("MODIFY_AUDIO_SETTINGS", if (modifyPerm) "✓ CONCEDIDO" else "✗ DENEGADO", if (modifyPerm) Color.Green else Color.Red)
+        DiagRow("WRITE_EXTERNAL_STORAGE", if (writePerm) "✓ CONCEDIDO" else "✗ DENEGADO", if (writePerm) Color.Green else Color.Red)
+
+        if (ShmManager.lastError != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("ÚLTIMO ERROR:", color = Color.Red, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(ShmManager.lastError!!, color = Color.Red, fontSize = 12.sp)
+        }
+
+        if (AudioEngine.audio_latencia_us < 0) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("ERROR AUDIO: Latencia negativa indica fallo en AAudio", color = Color.Red, fontSize = 12.sp)
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Button(
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))
+        ) {
+            Text("VOLVER", fontSize = 16.sp)
+        }
+    }
+}
+
+@Composable
+fun DiagRow(label: String, value: String, valueColor: Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(text = label, color = Color.Gray, fontSize = 13.sp)
+        Text(text = value, color = valueColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -183,100 +298,102 @@ fun FusionDial(level: Float, onLevelChange: (Float) -> Unit, modifier: Modifier 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val centerX = size.width / 2
             val centerY = size.height / 2
-            val radius = size.minDimension / 2 - 20
+            val radius = size.minDimension / 2 - 16
 
-            // Fondo del dial
             drawCircle(
-                color = Color.DarkGray,
+                color = Color(0xFF333333),
                 radius = radius,
                 center = Offset(centerX, centerY),
-                style = Stroke(width = 20f)
+                style = Stroke(width = 16f)
             )
 
-            // Arco de nivel
-            val sweepAngle = level * 270f - 135f
+            val sweepAngle = level * 270f
             drawArc(
                 color = when {
-                    level < 0.33 -> Color.Blue
-                    level < 0.66 -> Color.Cyan
+                    level < 0.33f -> Color(0xFF0088FF)
+                    level < 0.66f -> Color.Cyan
                     else -> Color.Magenta
                 },
-                startAngle = -135f,
-                sweepAngle = sweepAngle + 135f,
+                startAngle = 135f,
+                sweepAngle = sweepAngle,
                 useCenter = false,
                 topLeft = Offset(centerX - radius, centerY - radius),
                 size = Size(radius * 2, radius * 2),
-                style = Stroke(width = 20f)
+                style = Stroke(width = 16f)
             )
 
-            // Indicador
-            val indicatorAngle = Math.toRadians((sweepAngle).toDouble())
-            val indicatorX = centerX + (radius - 10) * cos(indicatorAngle).toFloat()
-            val indicatorY = centerY + (radius - 10) * sin(indicatorAngle).toFloat()
+            val indicatorAngle = Math.toRadians((135f + sweepAngle).toDouble())
+            val indicatorX = centerX + (radius - 8) * cos(indicatorAngle).toFloat()
+            val indicatorY = centerY + (radius - 8) * sin(indicatorAngle).toFloat()
 
             drawCircle(
                 color = Color.White,
-                radius = 15f,
+                radius = 12f,
                 center = Offset(indicatorX, indicatorY)
             )
         }
 
-        Text(
-            text = "${(level * 100).toInt()}%",
-            color = Color.White,
-            fontSize = 36.sp,
-            fontWeight = FontWeight.Bold
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "${(level * 100).toInt()}%",
+                color = Color.White,
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "FUSIÓN",
+                color = Color.Gray,
+                fontSize = 11.sp
+            )
+        }
     }
 }
 
 @Composable
 fun DualTimeline(isPredictionActive: Boolean, modifier: Modifier = Modifier) {
-    val realSamples = remember { FloatArray(256) { kotlin.math.sin(it * 0.1f) * 50 } }
-    val predictedSamples = remember { FloatArray(256) { kotlin.math.sin((it + 256) * 0.1f) * 50 } }
+    val realSamples = remember { FloatArray(128) { kotlin.math.sin(it * 0.15f) * 40 } }
+    val predictedSamples = remember { FloatArray(128) { kotlin.math.sin((it + 128) * 0.15f) * 40 } }
 
     Canvas(modifier = modifier) {
         val width = size.width
         val height = size.height
         val centerY = height / 2
+        val pastWidth = width * 0.5f
 
-        // Dibujar pasado (opaco)
-        for (i in 0 until 255) {
-            val x1 = i * width / 256
-            val x2 = (i + 1) * width / 256
+        for (i in 0 until 127) {
+            val x1 = i * pastWidth / 128
+            val x2 = (i + 1) * pastWidth / 128
             val y1 = centerY - realSamples[i]
             val y2 = centerY - realSamples[i + 1]
 
             drawLine(
-                color = Color.Green,
+                color = Color(0xFF00FF88),
                 start = Offset(x1, y1),
                 end = Offset(x2, y2),
-                strokeWidth = 2f
+                strokeWidth = 2.5f
             )
         }
 
-        // Dibujar predicción (semitransparente)
         if (isPredictionActive) {
-            for (i in 0 until 255) {
-                val x1 = (i + 256) * width / 512
-                val x2 = (i + 257) * width / 512
+            for (i in 0 until 127) {
+                val x1 = pastWidth + i * (width - pastWidth) / 128
+                val x2 = pastWidth + (i + 1) * (width - pastWidth) / 128
                 val y1 = centerY - predictedSamples[i]
                 val y2 = centerY - predictedSamples[i + 1]
 
                 drawLine(
-                    color = Color.Green.copy(alpha = 0.4f),
+                    color = Color(0xFF00FF88).copy(alpha = 0.35f),
                     start = Offset(x1, y1),
                     end = Offset(x2, y2),
-                    strokeWidth = 2f
+                    strokeWidth = 2.5f
                 )
             }
         }
 
-        // Línea divisoria
         drawLine(
-            color = Color.White.copy(alpha = 0.5f),
-            start = Offset(width / 2, 0f),
-            end = Offset(width / 2, height),
+            color = Color.White.copy(alpha = 0.3f),
+            start = Offset(pastWidth, 0f),
+            end = Offset(pastWidth, height),
             strokeWidth = 1f
         )
     }
@@ -285,55 +402,37 @@ fun DualTimeline(isPredictionActive: Boolean, modifier: Modifier = Modifier) {
 @Composable
 fun LatencyRing(latencyUs: Int, modifier: Modifier = Modifier) {
     val color = when {
-        latencyUs < 1000 -> Color.Green
+        latencyUs <= 0 -> Color(0xFF444444)
+        latencyUs < 1000 -> Color(0xFF00FF00)
         latencyUs < 2000 -> Color.Yellow
-        latencyUs < 3000 -> Color(0xFFFFA500)
+        latencyUs < 3000 -> Color(0xFFFF8800)
         else -> Color.Red
     }
+
+    val progress = if (latencyUs > 0) (latencyUs / 3000f).coerceIn(0f, 1f) else 0f
 
     Canvas(modifier = modifier) {
         val centerX = size.width / 2
         val centerY = size.height / 2
-        val radius = size.minDimension / 2 - 10
+        val radius = size.minDimension / 2 - 8
 
-        // Anillo cromático
         drawCircle(
-            color = color.copy(alpha = 0.3f),
+            color = Color(0xFF222222),
             radius = radius,
-            style = Stroke(width = 15f)
+            style = Stroke(width = 12f)
         )
 
-        // Arco de progreso
-        val progress = (latencyUs / 3000f).coerceIn(0f, 1f)
-        drawArc(
-            color = color,
-            startAngle = -90f,
-            sweepAngle = progress * 360f,
-            useCenter = false,
-            topLeft = Offset(centerX - radius, centerY - radius),
-            size = Size(radius * 2, radius * 2),
-            style = Stroke(width = 15f)
-        )
-    }
-}
-
-@Composable
-fun SatisfactionFlash() {
-    var visible by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        delay(300)
-        visible = false
-    }
-    if (visible) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(Color.Green.copy(alpha = 0.2f), Color.Transparent)
-                    )
-                )
-        )
+        if (progress > 0) {
+            drawArc(
+                color = color,
+                startAngle = -90f,
+                sweepAngle = progress * 360f,
+                useCenter = false,
+                topLeft = Offset(centerX - radius, centerY - radius),
+                size = Size(radius * 2, radius * 2),
+                style = Stroke(width = 12f)
+            )
+        }
     }
 }
 
@@ -347,17 +446,33 @@ fun GrandpaModeOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(Color(0xFF0A0A1A))
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.SpaceEvenly,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            GrandpaButton("ENCENDER", Color.Green, onMagic)
-            GrandpaButton("SILENCIO", Color.Yellow, onSilence)
-            GrandpaButton("MAGIA", Color.Magenta, onMagic)
-            GrandpaButton("RESET", Color.Red, onReset)
+            Text(
+                "MODO ABUELO",
+                color = Color.White,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 32.dp)
+            )
+
+            GrandpaButton("ENCENDER", Color(0xFF00AA00), onMagic)
+            GrandpaButton("SILENCIO", Color(0xFFAAAA00), onSilence)
+            GrandpaButton("MAGIA", Color(0xFFAA00AA), onMagic)
+            GrandpaButton("RESET", Color(0xFFAA0000), onReset)
+
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.padding(bottom = 32.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))
+            ) {
+                Text("VOLVER", fontSize = 20.sp)
+            }
         }
     }
 }
@@ -368,9 +483,9 @@ fun GrandpaButton(text: String, color: Color, onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth(0.9f)
-            .height(120.dp),
+            .height(90.dp),
         colors = ButtonDefaults.buttonColors(containerColor = color)
     ) {
-        Text(text = text, fontSize = 72.sp, fontWeight = FontWeight.Bold)
+        Text(text = text, fontSize = 48.sp, fontWeight = FontWeight.Bold)
     }
 }
