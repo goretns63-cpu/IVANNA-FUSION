@@ -253,37 +253,10 @@ fun SimbiosisScreen(navController: NavController) {
                         .padding(bottom = 16.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-<<<<<<< Updated upstream
-                    Button(
-                        onClick = { navController.navigate("monitor") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A3A))
-                    ) {
-                        Text("MONITOR", fontSize = 10.sp)
-                    }
-                    Button(
-                        onClick = { showGrandpaMode = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3A1A1A))
-                    ) {
-                        Text("ABUELO", fontSize = 10.sp)
-                    }
-                    Button(
-                        onClick = { navController.navigate("ai") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A103A))
-                    ) {
-                        Text("IA", fontSize = 10.sp)
-                    }
-                    Button(
-                        onClick = { navController.navigate("settings") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A3A1A))
-                    ) {
-                        Text("AJUSTES", fontSize = 10.sp)
-                    }
-=======
                     NavBtn("MONITOR")  { navController.navigate("monitor") }
                     NavBtn("ABUELO")   { showGrandpaMode = true }
                     NavBtn("IA")       { navController.navigate("ai") }
                     NavBtn("AJUSTES")  { navController.navigate("settings") }
->>>>>>> Stashed changes
                 }
             }
         }

@@ -105,8 +105,36 @@ object ShmManager {
         return ShortArray(10) { b.getShort(OFFSET_TEMP + it * 2) }
     }
 
+    // ── Variables canónicas leídas desde SHM — accesibles desde UI ─────────────
+    var kalman_fase_rad: Float = 0f
+        private set
+    var kalman_frec_hz: Float = 0f
+        private set
+    var shm_seq_counter: Long = 0L
+        private set
+    var shm_buffer_activo: Int = 0
+        private set
+
+    /** Refresca todas las variables canónicas desde el buffer SHM. Llamar desde corrutina UI. */
+    fun refreshCanonicalVars() {
+        val b = buf() ?: return
+        kalman_fase_rad   = b.getFloat(OFFSET_KALMAN)
+        kalman_frec_hz    = b.getFloat(OFFSET_KALMAN + 4)
+        shm_seq_counter   = b.getLong(OFFSET_SEQ)
+        shm_buffer_activo = b.get(OFFSET_ACTIVE).toInt().and(0xFF)
+    }
+
     fun writeFusionLevel(level: Float) {
         hyperplaneBuffer?.putFloat(OFFSET_KALMAN + 12, level)
+    }
+
+    /** Escribe hasta 10 temperaturas (Short) en la zona temp_soc del hiperplano. */
+    fun writeTemperatures(temps: ShortArray) {
+        val b = hyperplaneBuffer ?: return
+        val count = minOf(temps.size, 10)
+        for (i in 0 until count) {
+            b.putShort(OFFSET_TEMP + i * 2, temps[i])
+        }
     }
 
     fun close() {

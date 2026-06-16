@@ -23,6 +23,11 @@ object ThermalMonitor {
     var temp_npu: Short = 0
     var temp_pmic: Short = 0
 
+    // Variables del planificador térmico
+    var sched_nucleo_activo: Short = 4
+    var sched_budget_mW: Short = 1500
+    var sched_throttle_predicho: Boolean = false
+
     private var monitoringThread: Thread? = null
     private var isMonitoring = false
 
@@ -91,12 +96,8 @@ object ThermalMonitor {
             temp_cpu_core4, temp_cpu_core5, temp_cpu_core6, temp_cpu_core7,
             temp_gpu, temp_npu
         )
-        // Escribir en memoria compartida
-        ShmManager.getBuffer()?.let { buf ->
-            for (i in 0 until 10) {
-                buf.putShort(0 + i * 2, temps[i]) // Offset temporal
-            }
-        }
+        // Escribir en la zona temp_soc del hiperplano a través de ShmManager
+        ShmManager.writeTemperatures(temps)
     }
 
     fun getMaxTemperature(): Short {

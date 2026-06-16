@@ -302,32 +302,4 @@ fun tempColor(tempC: Int): Color = when {
     else -> Color.Red
 }
 
-// Clases y objetos referenciados (deben existir en el proyecto)
-object ThermalMonitor {
-    var sched_nucleo_activo = 4
-    var sched_budget_mW = 1500
-    var sched_throttle_predicho = false
-    var temp_cpu_core0 = 45
-    var temp_gpu = 40
-    var temp_npu = 38
-    var temp_pmic = 42
-}
 
-object ShmManager {
-    var shmInitialized = true
-    var kalman_frec_hz = 0f
-    var kalman_fase_rad = 0f
-    var shm_seq_counter = 0L
-    fun refreshCanonicalVars() { /* implementación real */ }
-}
-
-object AudioEngine {
-    var audio_fs_hz = 44100
-    var audio_bit_depth = 16
-    var audio_latencia_us = 5000
-    fun initializeEvolution() { /* ... */ }
-    fun evolveStep() { /* ... */ }
-    fun getGeneration(): Int = 0
-    fun getBestFitness(): Float = 0f
-    fun getPhaseErrorRms(): Float = 0f
-}
