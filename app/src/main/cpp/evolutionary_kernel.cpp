@@ -1,6 +1,9 @@
 /*
  * IVANNA-FUSION TRASCENDENTAL
  * © 2025 Luis Uriel Pimentel Pérez. Todos los derechos reservados.
+ *
+ * Motor evolutivo: genera genomas que controlan el timbre de la síntesis aditiva.
+ * Fitness = energía media × (1 - varianza) → favorece distribuciones armónicas suaves.
  */
 
 #include <jni.h>
@@ -10,8 +13,8 @@
 #include <random>
 
 #define POPULATION_SIZE 128
-#define GENOME_SIZE 256
-#define ELITE_COUNT 4
+#define GENOME_SIZE     256
+#define ELITE_COUNT       4
 
 struct Individual {
     uint8_t genome[GENOME_SIZE];
@@ -26,108 +29,106 @@ struct Population {
 
 static Population g_population;
 static std::mt19937 g_rng(42);
+// Tasa de mutación controlable desde Kotlin
+static float g_mutationRate = 0.01f;
 
-float evaluateFitness(const uint8_t *genome) {
-    // Fitness basado en correlación con señal objetivo
-    float sum = 0.0f;
+// ── Fitness: favorece timbre rico y suave (pocos saltos bruscos entre armónicos) ──
+static float evaluateFitness(const uint8_t *genome) {
+    float energy = 0.0f, smoothness = 0.0f;
     for (int i = 0; i < GENOME_SIZE; i++) {
-        sum += static_cast<float>(genome[i]) / 255.0f;
+        float v = static_cast<float>(genome[i]) / 255.0f;
+        energy += v;
+        if (i > 0) {
+            float delta = v - static_cast<float>(genome[i - 1]) / 255.0f;
+            smoothness += delta * delta;
+        }
     }
-    return sum / GENOME_SIZE;
+    energy    /= GENOME_SIZE;
+    smoothness /= (GENOME_SIZE - 1);
+    // Premia energía alta + transiciones suaves (más musical)
+    return energy * (1.0f - 0.85f * smoothness);
 }
 
-void initializePopulation() {
+static void initializePopulation() {
     for (int i = 0; i < POPULATION_SIZE; i++) {
-        for (int j = 0; j < GENOME_SIZE; j++) {
+        for (int j = 0; j < GENOME_SIZE; j++)
             g_population.individuals[i].genome[j] = static_cast<uint8_t>(g_rng() % 256);
-        }
         g_population.individuals[i].fitness = evaluateFitness(g_population.individuals[i].genome);
     }
-    g_population.generation = 0;
-    
-    // Encontrar mejor fitness
+    g_population.generation  = 0;
     g_population.bestFitness = 0.0f;
-    for (int i = 0; i < POPULATION_SIZE; i++) {
-        if (g_population.individuals[i].fitness > g_population.bestFitness) {
+    for (int i = 0; i < POPULATION_SIZE; i++)
+        if (g_population.individuals[i].fitness > g_population.bestFitness)
             g_population.bestFitness = g_population.individuals[i].fitness;
-        }
-    }
 }
 
-void crossover(const uint8_t *parent1, const uint8_t *parent2, uint8_t *child) {
-    int crossoverPoint = g_rng() % GENOME_SIZE;
-    for (int i = 0; i < crossoverPoint; i++) {
-        child[i] = parent1[i];
-    }
-    for (int i = crossoverPoint; i < GENOME_SIZE; i++) {
-        child[i] = parent2[i];
-    }
+static void crossover(const uint8_t *p1, const uint8_t *p2, uint8_t *child) {
+    int pt = (int)(g_rng() % GENOME_SIZE);
+    memcpy(child,      p1,    (size_t)pt);
+    memcpy(child + pt, p2 + pt, (size_t)(GENOME_SIZE - pt));
 }
 
-void mutate(uint8_t *genome, float mutationRate) {
-    for (int i = 0; i < GENOME_SIZE; i++) {
-        if (static_cast<float>(g_rng()) / g_rng.max() < mutationRate) {
+static void mutate(uint8_t *genome, float rate) {
+    for (int i = 0; i < GENOME_SIZE; i++)
+        if (static_cast<float>(g_rng()) / (float)g_rng.max() < rate)
             genome[i] = static_cast<uint8_t>(g_rng() % 256);
-        }
-    }
 }
 
-void evolveGeneration() {
-    Individual newPopulation[POPULATION_SIZE];
-    
-    // Elitismo
-    memcpy(newPopulation, g_population.individuals, sizeof(Individual) * ELITE_COUNT);
-    
-    // Generar resto
+static void evolveGeneration() {
+    Individual next[POPULATION_SIZE];
+    // Elitismo: copiar los mejores
+    memcpy(next, g_population.individuals, sizeof(Individual) * ELITE_COUNT);
+
     for (int i = ELITE_COUNT; i < POPULATION_SIZE; i++) {
-        // Selección por torneo
-        int idx1 = g_rng() % POPULATION_SIZE;
-        int idx2 = g_rng() % POPULATION_SIZE;
-        const Individual *parent1 = (g_population.individuals[idx1].fitness > g_population.individuals[idx2].fitness) 
-            ? &g_population.individuals[idx1] : &g_population.individuals[idx2];
-        
-        idx1 = g_rng() % POPULATION_SIZE;
-        idx2 = g_rng() % POPULATION_SIZE;
-        const Individual *parent2 = (g_population.individuals[idx1].fitness > g_population.individuals[idx2].fitness) 
-            ? &g_population.individuals[idx1] : &g_population.individuals[idx2];
-        
-        crossover(parent1->genome, parent2->genome, newPopulation[i].genome);
-        mutate(newPopulation[i].genome, 0.01f);
-        newPopulation[i].fitness = evaluateFitness(newPopulation[i].genome);
+        // Selección por torneo (2 vs 2)
+        int a1 = (int)(g_rng() % POPULATION_SIZE), a2 = (int)(g_rng() % POPULATION_SIZE);
+        int b1 = (int)(g_rng() % POPULATION_SIZE), b2 = (int)(g_rng() % POPULATION_SIZE);
+        const Individual *p1 = (g_population.individuals[a1].fitness >= g_population.individuals[a2].fitness)
+                                ? &g_population.individuals[a1] : &g_population.individuals[a2];
+        const Individual *p2 = (g_population.individuals[b1].fitness >= g_population.individuals[b2].fitness)
+                                ? &g_population.individuals[b1] : &g_population.individuals[b2];
+        crossover(p1->genome, p2->genome, next[i].genome);
+        mutate(next[i].genome, g_mutationRate);
+        next[i].fitness = evaluateFitness(next[i].genome);
     }
-    
-    memcpy(g_population.individuals, newPopulation, sizeof(newPopulation));
+    memcpy(g_population.individuals, next, sizeof(next));
     g_population.generation++;
-    
-    // Actualizar mejor fitness
     g_population.bestFitness = 0.0f;
-    for (int i = 0; i < POPULATION_SIZE; i++) {
-        if (g_population.individuals[i].fitness > g_population.bestFitness) {
+    for (int i = 0; i < POPULATION_SIZE; i++)
+        if (g_population.individuals[i].fitness > g_population.bestFitness)
             g_population.bestFitness = g_population.individuals[i].fitness;
-        }
-    }
 }
 
 extern "C" {
 
 JNIEXPORT void JNICALL
-Java_com_ivannafusion_AudioEngine_nativeInitializeEvolution(JNIEnv *env, jobject thiz) {
+Java_com_ivannafusion_AudioEngine_nativeInitializeEvolution(JNIEnv *, jobject) {
     initializePopulation();
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_ivannafusion_AudioEngine_nativeGetBestFitness(JNIEnv *env, jobject thiz) {
+Java_com_ivannafusion_AudioEngine_nativeGetBestFitness(JNIEnv *, jobject) {
     return g_population.bestFitness;
 }
 
 JNIEXPORT jint JNICALL
-Java_com_ivannafusion_AudioEngine_nativeGetGeneration(JNIEnv *env, jobject thiz) {
+Java_com_ivannafusion_AudioEngine_nativeGetGeneration(JNIEnv *, jobject) {
     return static_cast<jint>(g_population.generation);
 }
 
 JNIEXPORT void JNICALL
-Java_com_ivannafusion_AudioEngine_nativeEvolveStep(JNIEnv *env, jobject thiz) {
+Java_com_ivannafusion_AudioEngine_nativeEvolveStep(JNIEnv *, jobject) {
     evolveGeneration();
+}
+
+JNIEXPORT void JNICALL
+Java_com_ivannafusion_AudioEngine_nativeSetMutationRate(JNIEnv *, jobject, jfloat rate) {
+    if (rate > 0.0f && rate <= 1.0f) g_mutationRate = rate;
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_ivannafusion_AudioEngine_nativeGetMutationRate(JNIEnv *, jobject) {
+    return g_mutationRate;
 }
 
 } // extern "C"
